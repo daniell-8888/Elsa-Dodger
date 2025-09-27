@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Elsa Dodger</title>
+    <style>
+      :root { --bg:#0b1020; --fg:#e2e8f0; --acc:#38bdf8; --bad:#f43f5e; }
+      html,body { height:100%; margin:0; }
+      body {
+        display:grid; place-items:center;
+        background:radial-gradient(1000px 600px at 50% 20%, #0f172a, var(--bg));
+        color:var(--fg);
+        font-family:system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+      }
+      #wrap { display:flex; flex-direction:column; gap:10px; align-items:center; }
+      #hud { display:flex; gap:18px; align-items:center; font-weight:600; }
+      #hud span { opacity:.85 }
+      #game {
+        width: 420px; height: 620px; background:#0a1226; border:1px solid #1f2a44;
+        box-shadow:0 20px 60px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.03);
+        position:relative; overflow:hidden; border-radius:14px;
+      }
+      .player,.ob { position:absolute; border-radius:6px; }
+
+      /* Player now uses image.jpg */
+      .player {
+        width:26px; height:26px;
+        background: url("./image.jpg") center/cover no-repeat;
+        box-shadow:0 6px 16px rgba(56,189,248,.45);
+      }
+
+      /* Obstacles now use the original player gradient color */
+      #game .ob{
+        background: linear-gradient(180deg, #22d3ee, #38bdf8) !important;
+        box-shadow: 0 6px 16px rgba(56,189,248,.35);
+      }
+
+      #overlay {
+        position:absolute; inset:0; display:grid; place-items:center; background:linear-gradient(180deg, rgba(10,18,38,.3), rgba(10,18,38,.7));
+        color:#e5e7eb; text-align:center; padding:20px;
+      }
+      #overlay .card {
+        background:rgba(15,23,42,.7); border:1px solid rgba(148,163,184,.2);
+        border-radius:12px; padding:18px 16px; width:min(90%, 360px);
+        box-shadow:0 10px 30px rgba(0,0,0,.35);
+      }
+      button {
+        appearance:none; background:linear-gradient(180deg, #38bdf8, #0ea5e9);
+        color:#062032; border:0; padding:10px 14px; border-radius:10px;
+        font-weight:700; cursor:pointer; box-shadow:0 6px 18px rgba(56,189,248,.35);
+      }
+      button:active { transform:translateY(1px) }
+      .keys { display:flex; gap:8px; justify-content:center; margin-top:10px; opacity:.85; }
+      .k { border:1px solid #334155; padding:6px 8px; border-radius:8px; background:#0b1224; font-size:12px; }
+      @media (max-width:480px){ #game{ width:92vw; height:130vw; max-height:72vh; } }
+    </style>
+  </head>
+  <body>
+    <div id="wrap">
+      <div id="hud">
+        <span>Score: <b id="score">0</b></span>
+        <span>Best: <b id="best">0</b></span>
+        <span>Speed: <b id="spd">1.0x</b></span>
+      </div>
+      <div id="game">
+        <div id="overlay">
+          <div class="card">
+            <h2 style="margin:6px 0 4px">Elsa Dodger</h2>
+            <p style="margin:0 0 8px">Move the square, avoid falling blocks, survive as long as possible.</p>
+            <div class="keys">
+              <div class="k">←</div><div class="k">→</div><div class="k">Space</div><div class="k">Tap</div>
+            </div>
+            <p style="margin:12px 0 14px; font-size:14px; opacity:.9">←/→ or drag to move, Space to pause.</p>
+            <button id="start">Start</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const game = document.getElementById('game');
+      const scoreEl = document.getElementById('score');
+      const bestEl = document.getElementById('best');
+      const spdEl = document.getElementById('spd');
+      const overlay = document.getElementById('overlay');
+      const startBtn = document.getElementById('start');
+
+      const state = {
+        w: 420, h: 620, running:false, t:0, last:0, score:0, best: Number(localStorage.getItem('dodger-best')||0),
+        speed:1, spawnTimer:0, spawnEvery:900, player:null, input:0, paused:false
+      };
+
+      function size() {
+        const r = game.getBoundingClientRect();
+        state.w = r.width; state.h = r.height;
+      }
+      new ResizeObserver(size).observe(game); size();
+
+      function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+      function rand(a,b){ return Math.random()*(b-a)+a; }
+
+      function mkPlayer() {
+        const el = document.createElement('div');
+        el.className = 'player';
+        game.appendChild(el);
+        return { el, x: state.w/2-13, y: state.h-60, vx:0, size:26 };
+      }
+
+      const obs = [];
+      function reset() {
+        obs.forEach(o=>o.el.remove()); obs.length=0;
+        if (state.player) state.player.el.remove();
+        state.player = mkPlayer();
+        state.t = 0; state.last=0; state.score=0; state.speed=1; state.spawnTimer=0; state.spawnEvery=900; state.input=0; state.paused=false;
+        scoreEl.textContent = '0';
+        bestEl.textContent = String(state.best);
+        spdEl.textContent = '1.0x';
+      }
+
+      function spawn() {
+        const el = document.createElement('div');
+        el.className='ob';
+        const w = rand(18, 48);
+        const x = rand(0, state.w - w);
+        el.style.width = w+'px'; el.style.height = w+'px';
+        el.style.transform = `translate(${x}px, -${w}px)`;
+        game.appendChild(el);
+        obs.push({ el, x, y: -w, w, h:w, vy: rand(80, 150)*state.speed });
+      }
+
+      function collide(a, b) {
+        return !(a.x+a.w < b.x || a.x > b.x+b.w || a.y+a.h < b.y || a.y > b.y+b.h);
+      }
+
+      function step(ts) {
+        if (!state.running) return;
+        if (!state.last) state.last = ts;
+        const dt = Math.min(32, ts - state.last)/1000;
+        state.last = ts;
+        if (state.paused) return requestAnimationFrame(step);
+
+        // difficulty ramp
+        state.t += dt;
+        state.speed = 1 + Math.min(2.5, state.t/30);
+        spdEl.textContent = state.speed.toFixed(1)+'x';
+
+        // input & player
+        const p = state.player;
+        const accel = 900;
+        p.vx += state.input * accel * dt;
+        p.vx *= 0.92;
+        p.x = clamp(p.x + p.vx*dt, 0, state.w - p.size);
+        p.y = state.h - 60;
+        p.w = p.h = p.size;
+        p.el.style.transform = `translate(${p.x}px, ${p.y}px)`;
+
+        // spawn
+        state.spawnTimer -= dt*1000;
+        const targetEvery = 950 / state.speed;
+        state.spawnEvery += (targetEvery - state.spawnEvery)*0.03;
+        if (state.spawnTimer <= 0) {
+          spawn();
+          state.spawnTimer = state.spawnEvery * rand(0.6, 1.3);
+        }
+
+        // update obstacles
+        for (let i=obs.length-1;i>=0;i--){
+          const o = obs[i];
+          o.vy += 10*state.speed*dt;
+          o.y += o.vy*dt;
+          if (o.y > state.h+80) { o.el.remove(); obs.splice(i,1); continue; }
+          o.el.style.transform = `translate(${o.x}px, ${o.y}px)`;
+          if (collide({x:p.x,y:p.y,w:p.size,h:p.size}, o)) {
+            gameOver();
+            return;
+          }
+        }
+
+        // score
+        state.score += dt * 10 * state.speed;
+        scoreEl.textContent = String(Math.floor(state.score));
+
+        requestAnimationFrame(step);
+      }
+
+      function gameOver() {
+        state.running = false;
+        state.best = Math.max(state.best, Math.floor(state.score));
+        localStorage.setItem('dodger-best', String(state.best));
+        bestEl.textContent = String(state.best);
+        overlay.style.display='grid';
+        overlay.querySelector('.card').innerHTML = `
+          <h2 style="margin:6px 0 4px">Game Over</h2>
+          <p style="margin:0 0 8px">Score: <b>${Math.floor(state.score)}</b> · Best: <b>${state.best}</b></p>
+          <button id="restart">Play again</button>
+        `;
+        overlay.querySelector('#restart').onclick = () => { overlay.style.display='grid'; start(); };
+      }
+
+      function start() {
+        reset();
+        overlay.style.display='none';
+        state.running = true;
+        requestAnimationFrame(step);
+      }
+
+      // input handlers
+      let dragging = false, dragId = 0;
+      function setInputFromPointer(clientX) {
+        const mid = game.getBoundingClientRect().left + state.w/2;
+        state.input = clientX < mid ? -1 : 1;
+      }
+      game.addEventListener('pointerdown', e => { dragging = true; dragId = e.pointerId; setInputFromPointer(e.clientX); });
+      window.addEventListener('pointerup', e => { if (e.pointerId===dragId) { dragging = false; state.input = 0; }});
+      window.addEventListener('pointermove', e => { if (dragging) setInputFromPointer(e.clientX); });
+
+      window.addEventListener('keydown', e => {
+        if (e.code==='ArrowLeft') state.input = -1;
+        if (e.code==='ArrowRight') state.input = 1;
+        if (e.code==='Space') { state.paused = !state.paused; }
+      });
+      window.addEventListener('keyup', e => {
+        if (['ArrowLeft','ArrowRight'].includes(e.code)) state.input = 0;
+      });
+
+      startBtn.addEventListener('click', start);
+    </script>
+  </body>
+</html>
